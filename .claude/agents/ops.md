@@ -21,7 +21,7 @@ Run the build/verify steps the change requires (skip what it doesn't touch):
 - **green-light gate:** `sh tools/ci.sh` — the full host gate (tests + the audit ratchet + any build
   self-checks).
 - **CI gate:** `sh tools/ci-audit/check.sh` — the audit ratchet on its own; no regressions (exit 1
-  blocks the push). Re-run at push time even if `ci.sh` was green, since commits may have landed.
+  blocks the push). Re-run at push time even if `tools/ci.sh` was green, since commits may have landed.
 
 ## Resource discipline
 Serialize heavy stages — don't run multiple heavy builds at once. If you must stop a process you
