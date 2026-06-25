@@ -43,7 +43,7 @@
 
 ## Open questions (please reframe)
 1. **Generic vs typed storage:** keep `entities` + `entity_data` (JSONB) as the generic store, with builtins (cases,
-   users, teams) in typed tables? Or all-JSONB? What's the lean generalized choice (RedPash ran both)?
+   users, teams) in typed tables? Or all-JSONB? What's the lean generalized choice (both were used in the source)?
 2. **Client/server parity:** which tables must run in the in-browser SQL engine (GlueSQL) for the client-only demos
    (e.g. `entity-rbac`)? Define the portable subset + the Postgres-only extras.
 3. **`scope_parents` / recursive CTE:** confirm the schema shape that lets the *later* resolver generate one shared
@@ -52,8 +52,8 @@
    keep transitions per-type? How are multiple source-keyed workflows (e.g. internal vs external) modelled?
 5. **Orchestrator state in DB vs the file ledger:** the file ledger (`current_feature.md`) is the existing convention —
    do we mirror it into `feature_runs`/`role_handoffs`, replace it, or keep both? What does the MCP need?
-6. **Naming:** all table/column names must be RedPash-free and generic. Flag any that still leak domain meaning.
-7. **Baggage:** what in RedPash's `…_init.sql` should we NOT carry over (settings cascade? connectors? monitoring?
+6. **Naming:** all table/column names must be generic and free of any source-project identity. Flag any that still leak domain meaning.
+7. **Baggage:** what in the source's `init` schema should we NOT carry over (settings cascade? connectors? monitoring?
    designer? — likely deferred), to keep v1 minimal.
 
 *Owners: data-model + RBAC/registry, please edit this file (attributed) or comment on the Case
