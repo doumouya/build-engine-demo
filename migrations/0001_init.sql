@@ -139,7 +139,10 @@ create table role_handoffs (
 create index role_handoffs_run_idx on role_handoffs(feature_run_id);
 
 -- ── DB backstops: an engine-bypassing write can't land an unknown status (Δ3.4); entering the
---    terminal state requires every declared close precondition to have passed (Δ2 / Δ3.3). ──
+--    terminal state requires every declared close precondition to have passed (Δ2 / Δ3.3). Every
+--    RAISE uses the pinned SQLSTATE 'WG001' so the app can distinguish "guard fired during a write
+--    the engine had ALLOWED" (= engine/trigger drift → a loud 500 workflow_guard) from ordinary
+--    validation it already reports as a clean 4xx. ──
 create or replace function cases_guard() returns trigger as $$
 declare
   wf_states jsonb;
@@ -150,10 +153,10 @@ begin
   select states, close_checks into wf_states, wf_checks
     from workflows where workflow_id = new.workflow_id;
   if wf_states is null then
-    raise exception 'unknown_workflow: %', new.workflow_id;
+    raise exception 'unknown_workflow: %', new.workflow_id using errcode = 'WG001';
   end if;
   if not (wf_states ? new.status) then
-    raise exception 'unknown_status: % is not a state of workflow %', new.status, new.workflow_id;
+    raise exception 'unknown_status: % is not a state of workflow %', new.status, new.workflow_id using errcode = 'WG001';
   end if;
   terminal := wf_states ->> (jsonb_array_length(wf_states) - 1);
   if new.status = terminal and not (tg_op = 'UPDATE' and old.status = new.status) then
@@ -164,7 +167,7 @@ begin
         where k.case_id = new.entity_id and k.check_name = c.value and k.passed
      );
     if missing is not null then
-      raise exception 'close_preconditions_unmet: %', missing;
+      raise exception 'close_preconditions_unmet: %', missing using errcode = 'WG001';
     end if;
   end if;
   return new;

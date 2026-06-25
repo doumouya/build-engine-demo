@@ -1,0 +1,15 @@
+# Rust build artifacts
+/target
+**/target
+
+# local env / secrets (DATABASE_URL etc.) — never commit
+.env
+.env.*
+!.env.example
+
+# editor / OS cruft
+*.swp
+*~
+.DS_Store
+
+# Cargo.lock IS committed (this is an application workspace, not a library).
