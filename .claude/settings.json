@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cat /home/mansa/rust-project/portfolio-ai-app/build-engine/.claude/case-first-reminder.txt 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}
