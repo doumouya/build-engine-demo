@@ -54,6 +54,15 @@ pub struct MembershipRow {
     pub created_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct WorkflowRow {
+    pub workflow_id: String,
+    pub states: Value,
+    pub transitions: Value,
+    pub initial: String,
+    pub close_checks: Value,
+}
+
 #[derive(Deserialize, Default)]
 pub struct ObjectsQuery {
     #[serde(rename = "type")]
@@ -115,6 +124,24 @@ pub async fn list_events(pool: &PgPool, entity: Option<&str>, kind: Option<&str>
     .await?)
 }
 
+pub async fn list_workflows(pool: &PgPool) -> Result<Vec<WorkflowRow>, AppError> {
+    Ok(sqlx::query_as::<_, WorkflowRow>(
+        "select workflow_id, states, transitions, initial, close_checks from workflows order by workflow_id",
+    )
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get_workflow(pool: &PgPool, id: &str) -> Result<WorkflowRow, AppError> {
+    sqlx::query_as::<_, WorkflowRow>(
+        "select workflow_id, states, transitions, initial, close_checks from workflows where workflow_id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AppError::NotFound("unknown_workflow"))
+}
+
 pub async fn list_memberships(pool: &PgPool, object: Option<&str>, member: Option<&str>) -> Result<Vec<MembershipRow>, AppError> {
     Ok(sqlx::query_as::<_, MembershipRow>(
         "select object_id, member_id, role, context_role, created_at from memberships \
@@ -169,7 +196,16 @@ pub fn routes() -> Router<AppState> {
         .route("/api/types", get(types_h))
         .route("/api/objects", get(objects_h))
         .route("/api/events", get(events_h))
+        .route("/api/workflows", get(workflows_h))
+        .route("/api/workflows/:id", get(workflow_h))
         .route("/api/memberships", get(memberships_h).post(grant_h).delete(revoke_h))
+}
+
+async fn workflows_h(State(st): State<AppState>) -> Result<Json<Vec<WorkflowRow>>, AppError> {
+    Ok(Json(list_workflows(&st.pool).await?))
+}
+async fn workflow_h(State(st): State<AppState>, axum::extract::Path(id): axum::extract::Path<String>) -> Result<Json<WorkflowRow>, AppError> {
+    Ok(Json(get_workflow(&st.pool, &id).await?))
 }
 
 async fn types_h(State(st): State<AppState>) -> Result<Json<Vec<TypeRow>>, AppError> {

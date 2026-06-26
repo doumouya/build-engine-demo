@@ -39,6 +39,24 @@ async fn types_and_objects_are_listed() {
 
 #[tokio::test]
 #[ignore]
+async fn workflows_are_readable() {
+    let pool = pool().await;
+    let all = admin::list_workflows(&pool).await.unwrap();
+    let feature = all.iter().find(|w| w.workflow_id == "feature").expect("seeded feature workflow");
+    assert_eq!(feature.initial, "backlog");
+    assert_eq!(feature.states.as_array().unwrap().len(), 4); // backlog,in_progress,in_review,done
+
+    let one = admin::get_workflow(&pool, "feature").await.unwrap();
+    assert_eq!(one.close_checks.as_array().unwrap().len(), 3);
+
+    assert!(matches!(
+        admin::get_workflow(&pool, "nope").await.unwrap_err(),
+        AppError::NotFound("unknown_workflow")
+    ));
+}
+
+#[tokio::test]
+#[ignore]
 async fn memberships_grant_validate_and_revoke() {
     let pool = pool().await;
     let detail = cases::create_case(
