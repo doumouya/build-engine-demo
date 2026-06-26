@@ -65,7 +65,8 @@ async fn run_tool(state: &AppState, name: &str, args: Value) -> Result<Value, Va
         }
         "get_case" => {
             let id = arg_str(&args, "id")?;
-            ok(cases::get_case(pool, &id).await)
+            let actor = args.get("actor_id").and_then(Value::as_str);
+            ok(cases::get_case(pool, &id, actor).await)
         }
         "list_cases" => {
             let q: cases::ListQuery = parse(args)?;
@@ -125,12 +126,12 @@ pub fn tool_defs() -> Value {
               "title": {"type":"string"}, "workflow_id": {"type":"string"}, "priority": {"type":"string"},
               "assignee_id": {"type":"string"}, "scope_parent_id": {"type":"string"}, "actor_id": {"type":"string"}
           }), json!(["title"])) },
-        { "name": "get_case", "description": "Read a case with its comments, close-check states, and recent activity.",
-          "inputSchema": obj(json!({"id": {"type":"string"}}), json!(["id"])) },
-        { "name": "list_cases", "description": "List cases, optionally filtered by status and/or scope parent.",
+        { "name": "get_case", "description": "Read a case with its comments, close-check states, and recent activity. With actor_id, an unreachable case is denied as not_found (leak-free).",
+          "inputSchema": obj(json!({"id": {"type":"string"}, "actor_id": {"type":"string"}}), json!(["id"])) },
+        { "name": "list_cases", "description": "List cases, optionally filtered by status and/or scope parent. With actor_id, results are restricted to what that actor can reach.",
           "inputSchema": obj(json!({
               "status": {"type":"string"}, "scope_parent": {"type":"string"},
-              "page": {"type":"integer"}, "size": {"type":"integer"}
+              "page": {"type":"integer"}, "size": {"type":"integer"}, "actor_id": {"type":"string"}
           }), json!([])) },
         { "name": "add_comment", "description": "Append a comment to a case thread.",
           "inputSchema": obj(json!({"id": {"type":"string"}, "body": {"type":"string"}, "actor_id": {"type":"string"}}), json!(["id","body"])) },

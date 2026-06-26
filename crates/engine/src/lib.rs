@@ -139,6 +139,87 @@ impl RejectReason {
     }
 }
 
+/// Compute every object id reachable by an actor, given the objects the actor is directly a member
+/// of (`seed`) and the scope-parent graph as `children_of` (a parent id → its child ids). Reach
+/// DESCENDS: a membership on an object grants reach to that object and everything scoped beneath it,
+/// transitively — a membership on a child never climbs to its parent.
+///
+/// Pure and cycle-safe. This is the portable reference resolver: the server computes the identical
+/// set with a recursive SQL CTE for efficiency (it never loads the whole graph), and a client demo
+/// can run *this* over an in-browser graph. An integration test asserts the two agree.
+pub fn reachable(
+    seed: &BTreeSet<String>,
+    children_of: &BTreeMap<String, Vec<String>>,
+) -> BTreeSet<String> {
+    let mut reached = BTreeSet::new();
+    let mut stack: Vec<String> = seed.iter().cloned().collect();
+    while let Some(node) = stack.pop() {
+        if reached.insert(node.clone()) {
+            if let Some(children) = children_of.get(&node) {
+                for child in children {
+                    if !reached.contains(child) {
+                        stack.push(child.clone());
+                    }
+                }
+            }
+        }
+    }
+    reached
+}
+
+#[cfg(test)]
+mod reach_tests {
+    use super::*;
+
+    fn graph() -> BTreeMap<String, Vec<String>> {
+        // org → [proj1, proj2]; proj1 → [caseA]; proj2 → [caseB]
+        let edge = |k: &str, v: &[&str]| (k.to_string(), v.iter().map(|s| s.to_string()).collect());
+        BTreeMap::from([
+            edge("org", &["proj1", "proj2"]),
+            edge("proj1", &["caseA"]),
+            edge("proj2", &["caseB"]),
+        ])
+    }
+    fn set(items: &[&str]) -> BTreeSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn membership_on_a_parent_reaches_all_descendants() {
+        assert_eq!(
+            reachable(&set(&["org"]), &graph()),
+            set(&["org", "proj1", "proj2", "caseA", "caseB"])
+        );
+    }
+
+    #[test]
+    fn membership_on_a_child_does_not_climb() {
+        let g = graph();
+        assert_eq!(reachable(&set(&["proj1"]), &g), set(&["proj1", "caseA"]));
+        assert_eq!(reachable(&set(&["caseA"]), &g), set(&["caseA"]));
+    }
+
+    #[test]
+    fn empty_seed_reaches_nothing() {
+        assert!(reachable(&set(&[]), &graph()).is_empty());
+    }
+
+    #[test]
+    fn multiple_memberships_union() {
+        assert_eq!(
+            reachable(&set(&["proj1", "proj2"]), &graph()),
+            set(&["proj1", "proj2", "caseA", "caseB"])
+        );
+    }
+
+    #[test]
+    fn cycles_terminate() {
+        let edge = |k: &str, v: &[&str]| (k.to_string(), v.iter().map(|s| s.to_string()).collect());
+        let g = BTreeMap::from([edge("a", &["b"]), edge("b", &["a"])]);
+        assert_eq!(reachable(&set(&["a"]), &g), set(&["a", "b"]));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

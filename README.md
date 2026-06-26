@@ -68,6 +68,7 @@ build-engine/
 ```
 
 ## Status
-v1 backend complete and tested — `engine` · `api` · `mcp` · the CI ratchet · the orchestrator config.
-Next: the demos built *through* the engine (each opened as a Case via the MCP tools), and the UIs
-that render the data this backend already stores.
+v1 backend complete and tested — `engine` · `api` · `mcp` · the CI ratchet · the orchestrator config,
+now with **membership-scoped RBAC reach** (leak-free reads; a pure resolver proven to agree with the
+SQL recursive CTE). Next: the demos built *through* the engine (each opened as a Case via the MCP
+tools), and the UIs that render the data this backend already stores.

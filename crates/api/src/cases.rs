@@ -13,11 +13,11 @@ use axum::routing::{get, patch, post, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use crate::error::AppError;
-use crate::{db, events, id, AppState};
+use crate::{db, events, id, reach, AppState};
 
 // ── request bodies ────────────────────────────────────────────────────────────
 #[derive(Deserialize)]
@@ -72,6 +72,14 @@ pub struct ListQuery {
     pub scope_parent: Option<String>,
     pub page: Option<i64>,
     pub size: Option<i64>,
+    /// When present, results are filtered to what this actor can reach (leak-free); absent = permissive.
+    pub actor_id: Option<String>,
+}
+
+/// The viewing actor for a read, supplied as a query param (`?actor_id=...`). Absent = permissive.
+#[derive(Deserialize)]
+pub struct ActorQuery {
+    pub actor_id: Option<String>,
 }
 
 // ── response rows ─────────────────────────────────────────────────────────────
@@ -230,6 +238,13 @@ pub async fn create_case(
 
     let mut tx = pool.begin().await?;
     db::register_entity(&mut tx, &id, "case", actor).await?;
+    // The generic registry row, so the case participates in the reach graph (entity_data.scope_parent_id
+    // is the edge the resolver climbs). It mirrors cases.scope_parent_id.
+    sqlx::query("insert into entity_data (entity_id, type_id, scope_parent_id) values ($1, 'case', $2)")
+        .bind(&id)
+        .bind(&body.scope_parent_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query(
         "insert into cases (entity_id, title, workflow_id, status, priority, assignee_id, scope_parent_id) \
          values ($1, $2, $3, $4, $5, $6, $7)",
@@ -256,11 +271,19 @@ pub async fn create_case(
     tx.commit().await?;
 
     events::emit(pool, &id, actor, "case_create", json!({ "case": &id, "type": "case" }));
-    get_case(pool, &id).await
+    get_case(pool, &id, None).await
 }
 
-pub async fn get_case(pool: &PgPool, id: &str) -> Result<CaseDetail, AppError> {
+/// Read a case. When `actor` is present, an object the actor cannot reach is denied with the same
+/// `404 not_found` as an absent one (leak-free) — so reach never leaks existence. `actor = None` is
+/// permissive (returns the case if it exists), which is the default until an auth layer is added.
+pub async fn get_case(pool: &PgPool, id: &str, actor: Option<&str>) -> Result<CaseDetail, AppError> {
     let case = fetch_case(pool, id).await?.ok_or(AppError::not_found())?;
+    if let Some(a) = actor {
+        if !reach::can_reach(pool, a, id).await? {
+            return Err(AppError::not_found());
+        }
+    }
     let comments = sqlx::query_as::<_, CommentRow>(
         "select id, author_id, body, at from case_comments where case_id = $1 order by at asc, id asc",
     )
@@ -291,11 +314,17 @@ pub async fn list_cases(pool: &PgPool, q: ListQuery) -> Result<CaseList, AppErro
     let page = q.page.unwrap_or(1).max(1);
     let size = q.size.unwrap_or(50).clamp(1, 200);
     let offset = (page - 1) * size;
-    // Permissive list: an unknown status filter simply matches nothing (the reach/RBAC filter is a
-    // later feature). The cross-workflow nature means we don't validate the status against one set.
+    // Reach filter: with an actor, restrict to the ids they can reach (an empty set ⇒ sees nothing);
+    // without one, permissive. An unknown status filter simply matches nothing — the list spans
+    // workflows, so it isn't validated against any single set.
+    let reachable: Option<Vec<String>> = match q.actor_id.as_deref() {
+        Some(a) => Some(reach::reachable_ids(pool, a).await?),
+        None => None,
+    };
     let sql = format!(
         "{CASE_SELECT} \
          where ($1::text is null or c.status = $1) and ($2::text is null or c.scope_parent_id = $2) \
+           and ($5::text[] is null or c.entity_id = any($5)) \
          order by e.created_at desc limit $3 offset $4"
     );
     let items = sqlx::query_as::<_, CaseRow>(&sql)
@@ -303,14 +332,17 @@ pub async fn list_cases(pool: &PgPool, q: ListQuery) -> Result<CaseList, AppErro
         .bind(&q.scope_parent)
         .bind(size)
         .bind(offset)
+        .bind(&reachable)
         .fetch_all(pool)
         .await?;
     let (total,): (i64,) = sqlx::query_as(
         "select count(*) from cases c \
-         where ($1::text is null or c.status = $1) and ($2::text is null or c.scope_parent_id = $2)",
+         where ($1::text is null or c.status = $1) and ($2::text is null or c.scope_parent_id = $2) \
+           and ($3::text[] is null or c.entity_id = any($3))",
     )
     .bind(&q.status)
     .bind(&q.scope_parent)
+    .bind(&reachable)
     .fetch_one(pool)
     .await?;
     Ok(CaseList {
@@ -475,6 +507,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/cases/:id/status", patch(status_h))
         .route("/api/cases/:id/checks/:name", put(check_h))
         .route("/api/cases/:id/assignee", put(assign_h))
+        .route("/api/reach", get(reach_h))
 }
 
 async fn create_h(
@@ -496,8 +529,22 @@ async fn list_h(
 async fn get_h(
     State(st): State<AppState>,
     Path(id): Path<String>,
+    Query(aq): Query<ActorQuery>,
 ) -> Result<Json<CaseDetail>, AppError> {
-    Ok(Json(get_case(&st.pool, &id).await?))
+    Ok(Json(get_case(&st.pool, &id, aq.actor_id.as_deref()).await?))
+}
+
+/// `GET /api/reach?actor_id=...` — the set of object ids the actor can reach (a small window onto the
+/// resolver that powers leak-free reads).
+async fn reach_h(
+    State(st): State<AppState>,
+    Query(aq): Query<ActorQuery>,
+) -> Result<Json<Value>, AppError> {
+    let actor = aq
+        .actor_id
+        .ok_or_else(|| AppError::unprocessable("actor_required", "actor_id query param is required"))?;
+    let reachable = reach::reachable_ids(&st.pool, &actor).await?;
+    Ok(Json(json!({ "actor_id": actor, "reachable": reachable })))
 }
 
 async fn comment_h(

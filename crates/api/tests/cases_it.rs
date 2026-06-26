@@ -150,7 +150,7 @@ async fn trigger_is_the_backstop() {
 #[ignore]
 async fn not_found_is_leak_free() {
     let pool = pool().await;
-    let err = cases::get_case(&pool, "CAS_DOESNOTEXIST").await.unwrap_err();
+    let err = cases::get_case(&pool, "CAS_DOESNOTEXIST", None).await.unwrap_err();
     assert!(matches!(err, AppError::NotFound("not_found")));
     let err2 = cases::set_status(&pool, "CAS_DOESNOTEXIST", "in_progress", None).await.unwrap_err();
     assert!(matches!(err2, AppError::NotFound("not_found")));
