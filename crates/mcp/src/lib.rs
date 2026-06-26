@@ -8,7 +8,7 @@
 //! becomes a tool error whose text is `AppError::to_wire()` — the exact contract HTTP returns — so
 //! the agent can see *why* (e.g. `invalid_transition`, or `close_preconditions_unmet` + `missing`).
 
-use api::{cases, AppError, AppState};
+use api::{admin, cases, runs, AppError, AppState};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
@@ -93,6 +93,38 @@ async fn run_tool(state: &AppState, name: &str, args: Value) -> Result<Value, Va
             let b: cases::AssignBody = parse(args)?;
             ok(cases::assign(pool, &id, b.assignee_id, b.actor_id.as_deref()).await)
         }
+        // ── orchestrator runs (the /feature pipeline records itself here) ──
+        "start_run" => {
+            let body: runs::StartRunBody = parse(args)?;
+            let actor = body.actor_id.clone();
+            ok(runs::start_run(pool, body, actor.as_deref()).await)
+        }
+        "record_handoff" => {
+            let id = arg_str(&args, "id")?;
+            let body: runs::HandoffBody = parse(args)?;
+            let actor = body.actor_id.clone();
+            ok(runs::record_handoff(pool, &id, body, actor.as_deref()).await)
+        }
+        "finish_run" => {
+            let id = arg_str(&args, "id")?;
+            let status = args.get("status").and_then(Value::as_str).unwrap_or("done");
+            let actor = args.get("actor_id").and_then(Value::as_str);
+            ok(runs::update_run(pool, &id, None, Some(status), actor).await)
+        }
+        "get_run" => {
+            let id = arg_str(&args, "id")?;
+            ok(runs::get_run(pool, &id).await)
+        }
+        "list_runs" => {
+            let status = args.get("status").and_then(Value::as_str);
+            ok(runs::list_runs(pool, status).await)
+        }
+        "list_events" => {
+            let entity = args.get("entity").and_then(Value::as_str);
+            let kind = args.get("kind").and_then(Value::as_str);
+            let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
+            ok(admin::list_events(pool, entity, kind, limit).await)
+        }
         other => Err(json!({ "error": "unknown_tool", "message": format!("no such tool: {other}") })),
     }
 }
@@ -143,6 +175,22 @@ pub fn tool_defs() -> Value {
               "note": {"type":"string"}, "actor_id": {"type":"string"}
           }), json!(["id","check_name","passed"])) },
         { "name": "assign", "description": "Set or clear a case's assignee.",
-          "inputSchema": obj(json!({"id": {"type":"string"}, "assignee_id": {"type":"string"}, "actor_id": {"type":"string"}}), json!(["id"])) }
+          "inputSchema": obj(json!({"id": {"type":"string"}, "assignee_id": {"type":"string"}, "actor_id": {"type":"string"}}), json!(["id"])) },
+        { "name": "start_run", "description": "Open an orchestrator feature run (records the /feature pipeline's own state).",
+          "inputSchema": obj(json!({"title": {"type":"string"}, "case_id": {"type":"string"}, "actor_id": {"type":"string"}}), json!(["title"])) },
+        { "name": "record_handoff", "description": "Record a role handoff on a run (architect/tester/coder/reviewer/ops) with its gate, outcome, and circuit-breaker counters.",
+          "inputSchema": obj(json!({
+              "id": {"type":"string"}, "role": {"type":"string"}, "gate": {"type":"string"}, "outcome": {"type":"string"},
+              "kind": {"type":"string"}, "attempt": {"type":"integer"}, "retries": {"type":"integer"}, "hops": {"type":"integer"},
+              "note": {"type":"string"}, "actor_id": {"type":"string"}
+          }), json!(["id","role"])) },
+        { "name": "finish_run", "description": "Close a run (default status 'done').",
+          "inputSchema": obj(json!({"id": {"type":"string"}, "status": {"type":"string"}, "actor_id": {"type":"string"}}), json!(["id"])) },
+        { "name": "get_run", "description": "Read a run with its ordered role handoffs.",
+          "inputSchema": obj(json!({"id": {"type":"string"}}), json!(["id"])) },
+        { "name": "list_runs", "description": "List feature runs, optionally filtered by status.",
+          "inputSchema": obj(json!({"status": {"type":"string"}}), json!([])) },
+        { "name": "list_events", "description": "Read the append-only activity feed (the Monitor spine), optionally filtered by entity/kind.",
+          "inputSchema": obj(json!({"entity": {"type":"string"}, "kind": {"type":"string"}, "limit": {"type":"integer"}}), json!([])) }
     ])
 }

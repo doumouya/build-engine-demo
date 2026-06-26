@@ -54,9 +54,12 @@ create table memberships (
 create index memberships_member_idx on memberships(member_id);
 
 -- ── append-only audit ────────────────────────────────────────────────────────
+-- entity_id is a SOFT reference to whatever the event is about — an entity, a feature run, a case —
+-- so it is deliberately NOT a foreign key: the audit log records heterogeneous subjects (and must
+-- survive the subject being deleted). The payload carries any extra context.
 create table events (
   id        bigserial primary key,
-  entity_id text references entities(id) on delete set null,
+  entity_id text,
   actor_id  text,
   kind      text not null,
   at        timestamptz not null default now(),
