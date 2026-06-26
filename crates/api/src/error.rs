@@ -47,6 +47,39 @@ impl AppError {
     pub fn not_found() -> Self {
         AppError::NotFound("not_found")
     }
+
+    /// The HTTP status this error maps to.
+    pub fn status(&self) -> StatusCode {
+        match self {
+            AppError::Unprocessable { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            AppError::BadRequest { .. } => StatusCode::BAD_REQUEST,
+            AppError::NotFound(_) => StatusCode::NOT_FOUND,
+            AppError::WorkflowGuard(_) | AppError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    /// The caller-facing JSON body: a stable `error` kind + `message` (+ `missing` for the close
+    /// gate). 5xx bodies are deliberately generic — internal detail is logged, never wired. Shared
+    /// by the HTTP response and the MCP tool-error surface, so both speak the identical contract.
+    pub fn to_wire(&self) -> serde_json::Value {
+        match self {
+            AppError::Unprocessable { kind, message, missing } => {
+                let mut b = serde_json::json!({ "error": kind, "message": message });
+                if let Some(m) = missing {
+                    b["missing"] = serde_json::json!(m);
+                }
+                b
+            }
+            AppError::BadRequest { kind, message } => {
+                serde_json::json!({ "error": kind, "message": message })
+            }
+            AppError::NotFound(kind) => serde_json::json!({ "error": kind, "message": "not found" }),
+            AppError::WorkflowGuard(_) => {
+                serde_json::json!({ "error": "workflow_guard", "message": "workflow guard violation" })
+            }
+            AppError::Internal(_) => serde_json::json!({ "error": "internal", "message": "internal error" }),
+        }
+    }
 }
 
 /// A sqlx error becomes either a `WorkflowGuard` (if it is the trigger's pinned SQLSTATE) or an
@@ -64,42 +97,15 @@ impl From<sqlx::Error> for AppError {
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, body) = match self {
-            AppError::Unprocessable {
-                kind,
-                message,
-                missing,
-            } => {
-                let mut b = serde_json::json!({ "error": kind, "message": message });
-                if let Some(m) = missing {
-                    b["missing"] = serde_json::json!(m);
-                }
-                (StatusCode::UNPROCESSABLE_ENTITY, b)
-            }
-            AppError::BadRequest { kind, message } => (
-                StatusCode::BAD_REQUEST,
-                serde_json::json!({ "error": kind, "message": message }),
-            ),
-            AppError::NotFound(kind) => (
-                StatusCode::NOT_FOUND,
-                serde_json::json!({ "error": kind, "message": "not found" }),
-            ),
+        // Log the opaque 5xx detail before discarding it; 4xx are already self-describing.
+        match &self {
             AppError::WorkflowGuard(detail) => {
-                tracing::error!("workflow_guard (engine/trigger drift): {detail}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    serde_json::json!({ "error": "workflow_guard", "message": "workflow guard violation" }),
-                )
+                tracing::error!("workflow_guard (engine/trigger drift): {detail}")
             }
-            AppError::Internal(detail) => {
-                tracing::error!("internal error: {detail}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    serde_json::json!({ "error": "internal", "message": "internal error" }),
-                )
-            }
-        };
-        (status, Json(body)).into_response()
+            AppError::Internal(detail) => tracing::error!("internal error: {detail}"),
+            _ => {}
+        }
+        (self.status(), Json(self.to_wire())).into_response()
     }
 }
 

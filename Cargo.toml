@@ -4,7 +4,7 @@
 # so every crate pins the same versions.
 [workspace]
 resolver = "2"
-members = ["crates/engine", "crates/api"]
+members = ["crates/engine", "crates/api", "crates/mcp"]
 
 [workspace.package]
 version = "0.1.0"
