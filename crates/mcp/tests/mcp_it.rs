@@ -40,11 +40,11 @@ async fn handshake_list_and_call_roundtrip() {
             .is_none()
     );
 
-    // tools/list → the case tools (7) + the orchestrator-run + events tools (6)
+    // tools/list → case tools (7) + run/events tools (6) + admin/registry tools (8)
     let list = mcp::dispatch(&st, &json!({"jsonrpc":"2.0","id":2,"method":"tools/list"}))
         .await
         .unwrap();
-    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 13);
+    assert_eq!(list["result"]["tools"].as_array().unwrap().len(), 21);
 
     // tools/call create_case → success content carrying the created case
     let created = mcp::dispatch(

@@ -62,6 +62,7 @@ pub struct UpdateRunBody {
 #[derive(Deserialize, Default)]
 pub struct ListQuery {
     pub status: Option<String>,
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
@@ -118,7 +119,9 @@ pub async fn start_run(pool: &PgPool, body: StartRunBody, actor: Option<&str>) -
     if title.is_empty() {
         return Err(AppError::unprocessable("title_required", "title is required"));
     }
-    if let Some(c) = body.case_id.as_deref() {
+    // a blank case_id means "no case link", not a guaranteed 400
+    let case_id = body.case_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(c) = case_id {
         let (ok,): (bool,) = sqlx::query_as("select exists(select 1 from cases where entity_id = $1)")
             .bind(c)
             .fetch_one(pool)
@@ -130,7 +133,7 @@ pub async fn start_run(pool: &PgPool, body: StartRunBody, actor: Option<&str>) -
     let id = id::new_id("RUN");
     sqlx::query("insert into feature_runs (id, case_id, title) values ($1, $2, $3)")
         .bind(&id)
-        .bind(&body.case_id)
+        .bind(case_id)
         .bind(title)
         .execute(pool)
         .await?;
@@ -155,9 +158,9 @@ pub async fn record_handoff(pool: &PgPool, run_id: &str, body: HandoffBody, acto
     .bind(&body.gate)
     .bind(&body.outcome)
     .bind(&body.kind)
-    .bind(body.attempt)
-    .bind(body.retries)
-    .bind(body.hops)
+    .bind(body.attempt.map(|v| v.max(0)))
+    .bind(body.retries.map(|v| v.max(0)))
+    .bind(body.hops.map(|v| v.max(0)))
     .bind(&body.note)
     .fetch_one(pool)
     .await?;
@@ -197,12 +200,13 @@ pub async fn get_run(pool: &PgPool, run_id: &str) -> Result<RunDetail, AppError>
     Ok(RunDetail { run, handoffs })
 }
 
-pub async fn list_runs(pool: &PgPool, status: Option<&str>) -> Result<Vec<RunRow>, AppError> {
+pub async fn list_runs(pool: &PgPool, status: Option<&str>, limit: i64) -> Result<Vec<RunRow>, AppError> {
     Ok(sqlx::query_as::<_, RunRow>(
         "select id, case_id, title, phase, status, started_at, updated_at from feature_runs \
-         where ($1::text is null or status = $1) order by started_at desc limit 200",
+         where ($1::text is null or status = $1) order by started_at desc limit $2",
     )
     .bind(status)
+    .bind(limit.clamp(1, 500))
     .fetch_all(pool)
     .await?)
 }
@@ -220,7 +224,7 @@ async fn start_h(State(st): State<AppState>, Json(body): Json<StartRunBody>) -> 
     Ok((StatusCode::CREATED, Json(start_run(&st.pool, body, actor.as_deref()).await?)))
 }
 async fn list_h(State(st): State<AppState>, Query(q): Query<ListQuery>) -> Result<Json<Vec<RunRow>>, AppError> {
-    Ok(Json(list_runs(&st.pool, q.status.as_deref()).await?))
+    Ok(Json(list_runs(&st.pool, q.status.as_deref(), q.limit.unwrap_or(200)).await?))
 }
 async fn get_h(State(st): State<AppState>, Path(id): Path<String>) -> Result<Json<RunDetail>, AppError> {
     Ok(Json(get_run(&st.pool, &id).await?))

@@ -85,6 +85,44 @@ async fn memberships_grant_validate_and_revoke() {
         AppError::BadRequest { .. }
     ));
 
-    let removed = admin::revoke(&pool, &obj, "USR_ADMIN", "admin").await.unwrap();
+    let removed = admin::revoke(&pool, &obj, "USR_ADMIN", Some("admin")).await.unwrap();
     assert_eq!(removed, 1, "the admin membership was revoked");
+}
+
+#[tokio::test]
+#[ignore]
+async fn create_object_mints_generic_entities() {
+    let pool = pool().await;
+    // bootstrap a user with no actor — the write counterpart that lets a fresh DB mint actors
+    let user = admin::create_object(
+        &pool,
+        admin::CreateObjectBody {
+            type_: "user".into(),
+            data: Some(serde_json::json!({ "name": "Zoe" })),
+            scope_parent_id: None,
+            actor_id: None,
+        },
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(user.r#type, "user");
+    assert!(user.entity_id.starts_with("USR_"));
+    assert_eq!(user.data["name"], "Zoe");
+
+    assert!(admin::list_objects(&pool, Some("user"), 200).await.unwrap().iter().any(|o| o.entity_id == user.entity_id));
+
+    // a minted user can now be granted a membership (previously only cases could be entities)
+    let target = cases::create_case(&pool, a_case("grant target"), Some("USR_ADMIN")).await.unwrap().case.entity_id;
+    admin::grant(&pool, GrantBody { object_id: target, member_id: user.entity_id.clone(), role: "viewer".into() }).await.unwrap();
+
+    // an unknown type is a clean 404
+    assert!(matches!(
+        admin::create_object(&pool, admin::CreateObjectBody { type_: "griffin".into(), data: None, scope_parent_id: None, actor_id: None }, None).await.unwrap_err(),
+        AppError::NotFound("unknown_type")
+    ));
+}
+
+fn a_case(title: &str) -> CreateCaseBody {
+    CreateCaseBody { title: title.into(), workflow_id: None, priority: None, assignee_id: None, scope_parent_id: None, actor_id: Some("USR_ADMIN".into()) }
 }

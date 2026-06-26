@@ -65,7 +65,7 @@ async fn run_lifecycle_records_handoffs_and_an_event() {
     assert_eq!(got.handoffs[0].role, "architect");
     assert_eq!(got.handoffs[0].kind, "gate"); // defaulted
 
-    assert!(runs::list_runs(&pool, Some("done")).await.unwrap().iter().any(|r| r.id == id));
+    assert!(runs::list_runs(&pool, Some("done"), 200).await.unwrap().iter().any(|r| r.id == id));
 
     // the run_start event landed on the Monitor feed (fire-and-forget, so poll briefly)
     let mut seen = false;

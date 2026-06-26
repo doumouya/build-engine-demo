@@ -117,13 +117,46 @@ async fn run_tool(state: &AppState, name: &str, args: Value) -> Result<Value, Va
         }
         "list_runs" => {
             let status = args.get("status").and_then(Value::as_str);
-            ok(runs::list_runs(pool, status).await)
+            let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(200);
+            ok(runs::list_runs(pool, status, limit).await)
         }
         "list_events" => {
             let entity = args.get("entity").and_then(Value::as_str);
             let kind = args.get("kind").and_then(Value::as_str);
             let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
             ok(admin::list_events(pool, entity, kind, limit).await)
+        }
+        // ── admin / registry surface (HTTP/MCP parity) ──
+        "list_types" => ok(admin::list_types(pool).await),
+        "list_objects" => {
+            let type_ = args.get("type").and_then(Value::as_str);
+            let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(200);
+            ok(admin::list_objects(pool, type_, limit).await)
+        }
+        "create_object" => {
+            let body: admin::CreateObjectBody = parse(args)?;
+            let actor = body.actor_id.clone();
+            ok(admin::create_object(pool, body, actor.as_deref()).await)
+        }
+        "list_workflows" => ok(admin::list_workflows(pool).await),
+        "get_workflow" => {
+            let id = arg_str(&args, "id")?;
+            ok(admin::get_workflow(pool, &id).await)
+        }
+        "list_memberships" => {
+            let object = args.get("object").and_then(Value::as_str);
+            let member = args.get("member").and_then(Value::as_str);
+            ok(admin::list_memberships(pool, object, member).await)
+        }
+        "grant" => {
+            let body: admin::GrantBody = parse(args)?;
+            ok(admin::grant(pool, body).await)
+        }
+        "revoke" => {
+            let object = arg_str(&args, "object")?;
+            let member = arg_str(&args, "member")?;
+            let role = args.get("role").and_then(Value::as_str);
+            ok(admin::revoke(pool, &object, &member, role).await.map(|n| json!({ "revoked": n })))
         }
         other => Err(json!({ "error": "unknown_tool", "message": format!("no such tool: {other}") })),
     }
@@ -146,8 +179,8 @@ fn ok<T: serde::Serialize>(r: Result<T, AppError>) -> Result<Value, Value> {
         .map_err(|e| e.to_wire())
 }
 
-/// The seven tool definitions, mirroring the HTTP bodies 1:1 (hand-written rather than generated to
-/// keep dependencies minimal).
+/// The tool definitions, mirroring the HTTP bodies 1:1 (hand-written rather than generated to keep
+/// dependencies minimal): cases, orchestrator runs, the activity feed, and the admin/registry surface.
 pub fn tool_defs() -> Value {
     let obj = |props: Value, required: Value| {
         json!({ "type": "object", "properties": props, "required": required })
@@ -191,6 +224,22 @@ pub fn tool_defs() -> Value {
         { "name": "list_runs", "description": "List feature runs, optionally filtered by status.",
           "inputSchema": obj(json!({"status": {"type":"string"}}), json!([])) },
         { "name": "list_events", "description": "Read the append-only activity feed (the Monitor spine), optionally filtered by entity/kind.",
-          "inputSchema": obj(json!({"entity": {"type":"string"}, "kind": {"type":"string"}, "limit": {"type":"integer"}}), json!([])) }
+          "inputSchema": obj(json!({"entity": {"type":"string"}, "kind": {"type":"string"}, "limit": {"type":"integer"}}), json!([])) },
+        { "name": "list_types", "description": "List the type registry (the declared object types and their id prefixes).",
+          "inputSchema": obj(json!({}), json!([])) },
+        { "name": "list_objects", "description": "List registry objects, optionally filtered by type.",
+          "inputSchema": obj(json!({"type": {"type":"string"}, "limit": {"type":"integer"}}), json!([])) },
+        { "name": "create_object", "description": "Mint a generic object of a declared type (e.g. a user or org). actor_id, if it is an existing entity, is granted owner.",
+          "inputSchema": obj(json!({"type": {"type":"string"}, "data": {"type":"object"}, "scope_parent_id": {"type":"string"}, "actor_id": {"type":"string"}}), json!(["type"])) },
+        { "name": "list_workflows", "description": "List the workflow-as-data definitions (states/transitions/initial/close_checks).",
+          "inputSchema": obj(json!({}), json!([])) },
+        { "name": "get_workflow", "description": "Read one workflow definition by id.",
+          "inputSchema": obj(json!({"id": {"type":"string"}}), json!(["id"])) },
+        { "name": "list_memberships", "description": "List the access graph, optionally filtered by object and/or member.",
+          "inputSchema": obj(json!({"object": {"type":"string"}, "member": {"type":"string"}}), json!([])) },
+        { "name": "grant", "description": "Grant a member a role on an object (roles are additive: viewer/member/admin/owner).",
+          "inputSchema": obj(json!({"object_id": {"type":"string"}, "member_id": {"type":"string"}, "role": {"type":"string"}}), json!(["object_id","member_id","role"])) },
+        { "name": "revoke", "description": "Revoke a member's role on an object (a specific role if given, else all of them).",
+          "inputSchema": obj(json!({"object": {"type":"string"}, "member": {"type":"string"}, "role": {"type":"string"}}), json!(["object","member"])) }
     ])
 }
