@@ -1,31 +1,73 @@
 # build-engine
 
-A **minimal, headless build-engine** for shipping small web apps fast and cleanly — a generalized foundation distilled
-from several production-discipline projects:
+![ci](https://github.com/doumouya/build-engine-demo/actions/workflows/ci.yml/badge.svg)
 
-- **Data model** — a "database-as-a-framework" registry: declare an object type as a *row* and it auto-wires storage,
-  CRUD, access-control edges, and an audit trail. New object types need (almost) no new code.
-- **Cases** — a workflow-as-data work tracker: states + allowed transitions are data, so an illegal transition is
-  rejected by construction (`422`), with comment threads and an audit event for every change.
-- **Agent orchestrator** — a 5-role pipeline (Architect → Tester → Coder → Reviewer → Ops) with tool-scoped
-  permissions, a Case-ID handoff bus, a resumable state ledger, and a circuit breaker — so AI coding agents ship
-  convention-correct code without eroding the codebase.
-- **CI ratchet** — one `ci.sh` runs a set of static audits that fail only on *new* violations vs. a committed baseline
-  (including a privacy-by-design gate), letting a fleet of agents move fast on one branch without drift.
+A small, headless **build system that hosts its own build process**. Declaring an object type is a
+*row*, not a migration; a workflow is *data*, not a `switch`; and the same gates that keep the code
+clean also make "built through this system" a verifiable claim rather than a slogan.
 
-It's **headless by design**: every capability stores its data ready for a UI to render later. The point is to build the
-*next* app *through* this engine — so the work tracker ends up holding the real, browsable history of how each app was
-built.
+It distills production-discipline patterns into a generalized, dependency-light core — the foundation
+a portfolio of small web apps is then built *through*, so the work tracker ends up holding the real,
+browsable history of how each one was made.
 
-## Status
-v1 in progress — the minimal engine: data model · Cases · orchestrator · CI. See `docs/`.
+## What's here
 
-## Layout (planned)
+| Crate | What it is |
+|---|---|
+| **`engine`** | The pure decision core: workflow-as-data (ordered states, permissive transitions, close-checks). No IO, no DB, no clock — `serde` only — so it is exhaustively unit-tested *and* compiles to `wasm32` to run client-side. |
+| **`api`** | The HTTP edge (Axum + sqlx + Postgres). It loads the workflow, asks the `engine`, and writes only on `Allow`. Runtime (non-macro) sqlx, so the build needs no database. |
+| **`mcp`** | A minimal MCP server (hand-rolled JSON-RPC over stdio) exposing the same operations as tools — so an AI agent drives the *exact same* validated service the HTTP edge does. |
+
+Plus a **5-role agent orchestrator** (`.claude/`), the **schema** (`migrations/`), and a **ratcheted
+CI gate** (`tools/`).
+
+## The ideas worth a look
+
+- **One source of truth, enforced twice.** The `engine` decides transitions; a Postgres trigger
+  (`cases_guard`) independently backstops the critical ones. A unit test proves the engine *never*
+  green-lights a write the trigger would reject — so the application layer and the database cannot
+  drift. If the trigger ever fires under normal flow (a bug), it surfaces as a loud `500`, never a
+  silent wrong answer.
+- **A workflow is data.** States, transitions, and close-preconditions live in a row. The terminal
+  state is `last(states)`; nothing hardcodes a status name. Illegal moves are simply absent from the
+  table, so they are rejected by construction (`422`).
+- **An identity/privacy gate in CI.** `tools/ci.sh` runs static audits that fail only on *new*
+  violations versus a committed baseline — including a scrub audit that fails the build on any
+  forbidden identity token, so the public code stays clean automatically.
+- **A wasm-clean core.** A purity check compiles `engine` to `wasm32`, so the identical rules can run
+  in a browser demo with no server at all.
+
+## Run it
+
+```sh
+# Hermetic gate: pure engine + the HTTP/MCP unit tests + the wasm purity check + the audits.
+# No database required.
+sh tools/ci.sh
+
+# Full integration suite against Postgres:
+createdb build_engine_test
+DATABASE_URL=postgres://localhost/build_engine_test cargo test -p api -p mcp -- --ignored
+
+# Serve the HTTP API (applies migrations on boot):
+DATABASE_URL=postgres://localhost/build_engine cargo run -p api
+
+# …or the MCP tool server (speaks JSON-RPC on stdio):
+DATABASE_URL=postgres://localhost/build_engine cargo run -p mcp
+```
+
+## Layout
 ```
 build-engine/
-  docs/            # DATA-MODEL.md, the build/orchestration notes, FE specs for later UIs
-  migrations/      # the schema
-  src/             # the headless backend (API + MCP)
-  .agents/         # the 5-role orchestrator config + /feature flow
-  ci.sh            # the ratcheted audit gate
+  crates/engine/   # pure workflow-as-data core (wasm-clean)
+  crates/api/      # Axum + sqlx HTTP edge
+  crates/mcp/      # MCP stdio tool surface
+  migrations/      # the schema (registry + workflow + cases + orchestrator state)
+  .claude/         # the 5-role orchestrator (/feature) + agent configs
+  tools/           # ci.sh — the ratcheted audit gate, plus the wasm purity check
+  docs/            # the data model + the cases-backend design spec
 ```
+
+## Status
+v1 backend complete and tested — `engine` · `api` · `mcp` · the CI ratchet · the orchestrator config.
+Next: the demos built *through* the engine (each opened as a Case via the MCP tools), and the UIs
+that render the data this backend already stores.
