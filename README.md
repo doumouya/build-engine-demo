@@ -10,6 +10,10 @@ It distills production-discipline patterns into a generalized, dependency-light 
 a portfolio of small web apps is then built *through*, so the work tracker ends up holding the real,
 browsable history of how each one was made.
 
+The first such record is already here: [`docs/build-log/entity-rbac.md`](docs/build-log/entity-rbac.md)
+is this repo's own RBAC feature, walked to `done` through the engine's MCP tools and gated by its own
+close-checks — the system recording its own construction.
+
 ## What's here
 
 | Crate | What it is |
